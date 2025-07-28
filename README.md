@@ -190,9 +190,9 @@ Proprietary - All rights reserved. This software is developed for institutional 
 
 For technical support, feature requests, or system integration questions:
 
-- **Development Team**: [Internal Contact]
-- **System Architecture**: [Architecture Lead]
-- **Trading Operations**: [Trading Desk Contact]
+- **Development Team**: Edwin Fernandez
+- **System Architecture**: Edwin Fernandez
+- **Trading Operations**: Edwin Fernandez
 
 ## 🏆 Acknowledgments
 
