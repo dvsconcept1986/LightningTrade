@@ -203,4 +203,4 @@ For technical support, feature requests, or system integration questions:
 
 ---
 
-**⚠️ Disclaimer**: This trading system is designed for professional institutional use. Trading involves substantial risk of loss and is not suitable for all investors. Past performance is not indicative of future results.
+**⚠️ Disclaimer**: This trading system is designed for educational purposes, for the sake of learning the ins and outs of trading systems. Trading involves substantial risk of loss and is not suitable for all investors. Past performance is not indicative of future results.
