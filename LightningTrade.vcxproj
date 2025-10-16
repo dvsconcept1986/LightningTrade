@@ -96,11 +96,21 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Order.cpp" />
+    <ClCompile Include="OrderBlotterWidget.cpp" />
+    <ClCompile Include="OrderEntryWidget.cpp" />
+    <ClCompile Include="OrderManager.cpp" />
     <QtRcc Include="MainWindow.qrc" />
     <QtUic Include="MainWindow.ui" />
     <QtMoc Include="MainWindow.h" />
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Order.h" />
+    <QtMoc Include="OrderBlotterWidget.h" />
+    <QtMoc Include="OrderEntryWidget.h" />
+    <QtMoc Include="OrderManager.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Condition="Exists('$(QtMsBuild)\qt.targets')">
