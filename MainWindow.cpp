@@ -15,6 +15,7 @@ MainWindow::MainWindow(QWidget* parent)
 	, m_refreshTimer(new QTimer(this))
 	, m_clockTimer(new QTimer(this))
 	, m_orderManager(new OrderManager(this))
+	, m_marketDataFeed(new MarketDataFeed(this))
 {
 	ui.setupUi(this);
 
@@ -42,9 +43,22 @@ MainWindow::MainWindow(QWidget* parent)
 	connect(m_orderManager, &OrderManager::logMessage,
 		this, &MainWindow::onOrderManagerLog);
 
+	// Connect market data feed signals
+	connect(m_marketDataFeed, &MarketDataFeed::marketDataUpdated,
+		this, &MainWindow::onMarketDataUpdated);
+	connect(m_marketDataFeed, &MarketDataFeed::logMessage,
+		this, &MainWindow::onOrderManagerLog);
+
 	// Start timers
-	m_refreshTimer->start(60000); // Refresh every minute
+	m_refreshTimer->start(60000); // Refresh news every minute
 	m_clockTimer->start(1000);    // Update clock every second
+
+	// Auto-start market data feed
+	QStringList defaultSymbols = { "AAPL", "MSFT", "GOOGL", "TSLA", "AMZN", "NVDA", "META", "SPY", "QQQ" };
+	for (const QString& symbol : defaultSymbols) {
+		m_marketDataFeed->subscribe(symbol);
+	}
+	m_marketDataFeed->connectToFeed();
 
 	// Load initial data
 	refreshMarketData();
@@ -129,8 +143,8 @@ void MainWindow::setupMarketDataArea()
 	m_refreshButton->setMaximumWidth(120);
 
 	// Price table
-	m_priceTable = new QTableWidget(0, 4, m_marketDataGroup);
-	m_priceTable->setHorizontalHeaderLabels({ "Symbol", "Price", "Change", "Volume" });
+	m_priceTable = new QTableWidget(0, 5, m_marketDataGroup);
+	m_priceTable->setHorizontalHeaderLabels({ "Symbol", "Price", "Change", "Change %", "Volume" });
 	m_priceTable->horizontalHeader()->setStretchLastSection(true);
 	m_priceTable->setAlternatingRowColors(true);
 	m_priceTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -246,6 +260,76 @@ void MainWindow::onOrderManagerLog(const QString& message)
 		.arg(message));
 }
 
+void MainWindow::onMarketDataUpdated(const QString& symbol, MarketData* data)
+{
+	if (!data) return;
+
+	// Find or create row for this symbol
+	int row = -1;
+	for (int i = 0; i < m_priceTable->rowCount(); ++i) {
+		QTableWidgetItem* item = m_priceTable->item(i, 0);
+		if (item && item->text() == symbol) {
+			row = i;
+			break;
+		}
+	}
+
+	// Create new row if not found
+	if (row < 0) {
+		row = m_priceTable->rowCount();
+		m_priceTable->insertRow(row);
+		m_priceTable->setItem(row, 0, new QTableWidgetItem(symbol));
+	}
+
+	// Update price
+	double price = data->lastPrice();
+	QTableWidgetItem* priceItem = new QTableWidgetItem(QString("$%1").arg(price, 0, 'f', 2));
+
+	// Update change
+	double change = data->changeAmount();
+	QString changeStr = QString("%1%2").arg(change >= 0 ? "+" : "").arg(change, 0, 'f', 2);
+	QTableWidgetItem* changeItem = new QTableWidgetItem(changeStr);
+
+	// Update change %
+	double changePercent = data->changePercent();
+	QString percentStr = QString("%1%2%").arg(changePercent >= 0 ? "+" : "").arg(changePercent, 0, 'f', 2);
+	QTableWidgetItem* percentItem = new QTableWidgetItem(percentStr);
+
+	// Color code based on change
+	QColor color;
+	if (change > 0) {
+		color = QColor(0, 200, 0);  // Green
+	}
+	else if (change < 0) {
+		color = QColor(255, 100, 100);  // Red
+	}
+	else {
+		color = QColor(255, 255, 255);  // White
+	}
+
+	priceItem->setForeground(color);
+	changeItem->setForeground(color);
+	percentItem->setForeground(color);
+
+	m_priceTable->setItem(row, 1, priceItem);
+	m_priceTable->setItem(row, 2, changeItem);
+	m_priceTable->setItem(row, 3, percentItem);
+
+	// Update volume
+	double volume = data->totalVolume();
+	QString volumeStr;
+	if (volume >= 1000000) {
+		volumeStr = QString("%1M").arg(volume / 1000000.0, 0, 'f', 2);
+	}
+	else if (volume >= 1000) {
+		volumeStr = QString("%1K").arg(volume / 1000.0, 0, 'f', 1);
+	}
+	else {
+		volumeStr = QString::number(volume, 'f', 0);
+	}
+	m_priceTable->setItem(row, 4, new QTableWidgetItem(volumeStr));
+}
+
 void MainWindow::refreshOrderBlotter()
 {
 	m_orderBlotterWidget->clearOrders();
@@ -266,7 +350,10 @@ void MainWindow::refreshMarketData()
 	m_refreshButton->setEnabled(false);
 
 	loadMarketNews();
-	loadMarketPrices();
+	// Market prices now come from the feed automatically
+
+	m_refreshButton->setEnabled(true);
+	m_statusLabel->setText("Market data updated");
 }
 
 void MainWindow::loadMarketNews()
@@ -284,14 +371,8 @@ void MainWindow::loadMarketNews()
 
 void MainWindow::loadMarketPrices()
 {
-	QString url = "https://api.coindesk.com/v1/bpi/currentprice.json";
-
-	QNetworkRequest request;
-	request.setUrl(QUrl(url));
-	request.setRawHeader("User-Agent", "LightningTrade/1.0");
-
-	QNetworkReply* reply = m_networkManager->get(request);
-	connect(reply, &QNetworkReply::finished, this, &MainWindow::onPriceReplyFinished);
+	// This is now handled by the MarketDataFeed
+	// Keeping this function for compatibility but it's not used anymore
 }
 
 void MainWindow::onNewsReplyFinished()
@@ -331,25 +412,7 @@ void MainWindow::onNewsReplyFinished()
 
 void MainWindow::onPriceReplyFinished()
 {
-	QNetworkReply* reply = qobject_cast<QNetworkReply*>(sender());
-	if (!reply) return;
-
-	reply->deleteLater();
-
-	if (reply->error() != QNetworkReply::NoError) {
-		loadDemoPrices();
-		return;
-	}
-
-	QByteArray data = reply->readAll();
-	QJsonDocument doc = QJsonDocument::fromJson(data);
-
-	if (doc.object().contains("bpi")) {
-		updatePriceDisplay(doc.object());
-	}
-	else {
-		loadDemoPrices();
-	}
+	// Not used anymore - prices come from MarketDataFeed
 }
 
 void MainWindow::updateNewsDisplay(const QJsonArray& articles)
@@ -373,20 +436,7 @@ void MainWindow::updateNewsDisplay(const QJsonArray& articles)
 
 void MainWindow::updatePriceDisplay(const QJsonObject& data)
 {
-	m_priceTable->setRowCount(0);
-
-	if (data.contains("bpi")) {
-		QJsonObject bpi = data["bpi"].toObject();
-		QJsonObject usd = bpi["USD"].toObject();
-
-		m_priceTable->insertRow(0);
-		m_priceTable->setItem(0, 0, new QTableWidgetItem("BTC/USD"));
-		m_priceTable->setItem(0, 1, new QTableWidgetItem(usd["rate"].toString()));
-		m_priceTable->setItem(0, 2, new QTableWidgetItem("+2.34%"));
-		m_priceTable->setItem(0, 3, new QTableWidgetItem("1.2B"));
-	}
-
-	loadDemoPrices();
+	// Not used anymore - prices come from MarketDataFeed
 }
 
 void MainWindow::showAbout()
@@ -429,37 +479,5 @@ void MainWindow::loadDemoNews()
 
 void MainWindow::loadDemoPrices()
 {
-	if (m_priceTable->rowCount() == 0) {
-		m_priceTable->setRowCount(0);
-	}
-
-	struct StockData {
-		QString symbol;
-		QString price;
-		QString change;
-		QString volume;
-	};
-
-	QList<StockData> stocks = {
-		{"AAPL", "$182.52", "+1.25%", "52.3M"},
-		{"MSFT", "$384.90", "+2.15%", "28.7M"},
-		{"GOOGL", "$149.34", "-0.85%", "24.1M"},
-		{"TSLA", "$253.80", "+4.32%", "89.5M"},
-		{"AMZN", "$151.94", "-1.05%", "35.2M"},
-		{"NVDA", "$722.48", "+3.67%", "41.8M"},
-		{"META", "$434.61", "+0.92%", "18.9M"},
-		{"BTC/USD", "$47,234", "+2.84%", "1.2B"},
-		{"SPY", "$487.23", "+0.67%", "67.4M"},
-		{"QQQ", "$391.45", "+1.23%", "45.6M"}
-	};
-
-	int startRow = m_priceTable->rowCount();
-	for (int i = 0; i < stocks.size(); ++i) {
-		int row = startRow + i;
-		m_priceTable->insertRow(row);
-		m_priceTable->setItem(row, 0, new QTableWidgetItem(stocks[i].symbol));
-		m_priceTable->setItem(row, 1, new QTableWidgetItem(stocks[i].price));
-		m_priceTable->setItem(row, 2, new QTableWidgetItem(stocks[i].change));
-		m_priceTable->setItem(row, 3, new QTableWidgetItem(stocks[i].volume));
-	}
+	// Not used anymore - prices come from MarketDataFeed
 }

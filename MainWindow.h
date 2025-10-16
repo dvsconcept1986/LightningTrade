@@ -22,6 +22,8 @@
 #include "OrderManager.h"
 #include "OrderEntryWidget.h"
 #include "OrderBlotterWidget.h"
+#include "MarketDataFeed.h"
+#include "MarketDataWidget.h"
 
 class MainWindow : public QMainWindow
 {
@@ -45,6 +47,9 @@ private slots:
 	void onOrderStatusChanged(const QString& orderId, OrderStatus status);
 	void onOrderManagerLog(const QString& message);
 	void refreshOrderBlotter();
+
+	// Market data slots
+	void onMarketDataUpdated(const QString& symbol, MarketData* data);
 
 private:
 	void setupUI();
@@ -87,6 +92,10 @@ private:
 	QTabWidget* m_tradingTabs;
 	OrderEntryWidget* m_orderEntryWidget;
 	OrderBlotterWidget* m_orderBlotterWidget;
+
+	// Market Data Feed
+	MarketDataFeed* m_marketDataFeed;
+	MarketDataWidget* m_marketDataWidget;
 
 	// Network
 	QNetworkAccessManager* m_networkManager;
