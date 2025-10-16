@@ -96,6 +96,9 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="MarketData.cpp" />
+    <ClCompile Include="MarketDataFeed.cpp" />
+    <ClCompile Include="MarketDataWidget.cpp" />
     <ClCompile Include="Order.cpp" />
     <ClCompile Include="OrderBlotterWidget.cpp" />
     <ClCompile Include="OrderEntryWidget.cpp" />
@@ -107,6 +110,9 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="MarketData.h" />
+    <QtMoc Include="MarketDataWidget.h" />
+    <QtMoc Include="MarketDataFeed.h" />
     <ClInclude Include="Order.h" />
     <QtMoc Include="OrderBlotterWidget.h" />
     <QtMoc Include="OrderEntryWidget.h" />
