@@ -50,7 +50,7 @@ Lightning Trade is a professional-grade, ultra-low latency trading system design
 - [x] Market data display interface
 - [x] News feed integration
 - [x] System logging and monitoring
-- [ ] **Order Management System (OMS)** - Complete order lifecycle management
+- [x] Order Management System (OMS) - Complete order lifecycle management
 - [ ] **Risk Management Engine** - Real-time position limits and exposure calculations
 - [ ] **Trading Strategy Framework** - Pluggable algorithm architecture
 
