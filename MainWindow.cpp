@@ -8,6 +8,8 @@
 #include <QUrl>
 #include <algorithm>
 
+// Add this to your MainWindow constructor initializer list:
+
 MainWindow::MainWindow(QWidget* parent)
 	: QMainWindow(parent)
 	, m_centralWidget(nullptr)
@@ -16,9 +18,27 @@ MainWindow::MainWindow(QWidget* parent)
 	, m_clockTimer(new QTimer(this))
 	, m_orderManager(new OrderManager(this))
 	, m_marketDataFeed(new MarketDataFeed(this))
+	, m_authManager(new AuthManager(this))  // ADD THIS LINE!
+	, m_userAccount(new UserAccount("trader001", "John Doe", "john@example.com"))
 {
-	ui.setupUi(this);
+	// Show login dialog BEFORE setting up UI
+	LoginDialog loginDialog(m_authManager, this);
+	if (loginDialog.exec() != QDialog::Accepted) {
+		// User cancelled login - exit application
+		QTimer::singleShot(0, qApp, &QApplication::quit);
+		return;
+	}
 
+	// Get the authenticated user's account
+	m_userAccount = m_authManager->getCurrentUser();
+
+	if (!m_userAccount) {
+		QMessageBox::critical(this, "Error", "Failed to load user account");
+		QTimer::singleShot(0, qApp, &QApplication::quit);
+		return;
+	}
+
+	// Rest of your initialization code...
 	setupMenuBar();
 	setupUI();
 	setupStatusBar();
@@ -60,6 +80,9 @@ MainWindow::MainWindow(QWidget* parent)
 	}
 	m_marketDataFeed->connectToFeed();
 
+	// NOTE: Don't give starting balance here - it's handled by AuthManager during registration
+	// m_userAccount->deposit(100000.00, "Initial Deposit"); // REMOVE THIS LINE
+
 	// Load initial data
 	refreshMarketData();
 }
@@ -72,6 +95,8 @@ void MainWindow::setupMenuBar()
 {
 	// File Menu
 	QMenu* fileMenu = menuBar()->addMenu("&File");
+	fileMenu->addAction("&Logout", this, &MainWindow::onLogout);
+	fileMenu->addSeparator();
 	fileMenu->addAction("&Exit", QKeySequence::Quit, this, &QWidget::close);
 
 	// View Menu
@@ -176,6 +201,16 @@ void MainWindow::setupOrderManagementArea()
 	// Order Blotter Tab
 	m_orderBlotterWidget = new OrderBlotterWidget(this);
 	m_tradingTabs->addTab(m_orderBlotterWidget, "Order Blotter");
+
+	// Account Tab (NEW)
+	m_accountWidget = new AccountWidget(m_userAccount, this);
+	m_tradingTabs->addTab(m_accountWidget, "Account");
+
+	// Connect signals
+	connect(m_accountWidget, &AccountWidget::depositRequested,
+		this, &MainWindow::onAccountDeposit);
+	connect(m_accountWidget, &AccountWidget::withdrawalRequested,
+		this, &MainWindow::onAccountWithdrawal);
 }
 
 void MainWindow::setupTradingArea()
@@ -208,9 +243,26 @@ void MainWindow::setupStatusBar()
 void MainWindow::handleOrderRequest(const QString& symbol, OrderSide side,
 	OrderType type, double quantity, double price)
 {
+	// Check if user has sufficient funds
+	double cost = quantity * price;
+
+	if (side == OrderSide::Buy && cost > m_userAccount->cashBalance()) {
+		QMessageBox::warning(this, "Insufficient Funds",
+			QString("Insufficient cash. Required: $%1, Available: $%2")
+			.arg(cost, 0, 'f', 2)
+			.arg(m_userAccount->cashBalance(), 0, 'f', 2));
+		return;
+	}
+
+	// Submit order
 	QString orderId = m_orderManager->submitOrder(symbol, side, type, quantity, price);
 
 	if (!orderId.isEmpty()) {
+		// Deduct cash for buy orders
+		if (side == OrderSide::Buy) {
+			m_userAccount->addPosition(symbol, quantity, price);
+		}
+
 		m_orderBlotter->append(QString("[%1] Order submitted: %2 %3 %4 @ %5")
 			.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
 			.arg(Order::sideToString(side))
@@ -219,6 +271,7 @@ void MainWindow::handleOrderRequest(const QString& symbol, OrderSide side,
 			.arg(price));
 
 		refreshOrderBlotter();
+		m_accountWidget->updateDisplay();
 	}
 }
 
@@ -328,6 +381,12 @@ void MainWindow::onMarketDataUpdated(const QString& symbol, MarketData* data)
 		volumeStr = QString::number(volume, 'f', 0);
 	}
 	m_priceTable->setItem(row, 4, new QTableWidgetItem(volumeStr));
+
+	// Update account position prices
+	if (m_userAccount->hasPosition(symbol)) {
+		m_userAccount->updatePositionPrice(symbol, data->lastPrice());
+		m_accountWidget->updatePositions();
+	}
 }
 
 void MainWindow::refreshOrderBlotter()
@@ -476,6 +535,113 @@ void MainWindow::loadDemoNews()
 		m_newsList->addItem(news);
 	}
 }
+
+void MainWindow::onAccountDeposit(double amount)
+{
+	m_orderBlotter->append(QString("[%1] Account deposit: $%2")
+		.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+		.arg(amount, 0, 'f', 2));
+}
+
+void MainWindow::onAccountWithdrawal(double amount)
+{
+	m_orderBlotter->append(QString("[%1] Account withdrawal: $%2")
+		.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+		.arg(amount, 0, 'f', 2));
+}
+
+void MainWindow::updateAccountPositions()
+{
+	// Update position prices with current market data
+	QList<Position> positions = m_userAccount->getAllPositions();
+	for (const Position& pos : positions) {
+		MarketData* data = m_marketDataFeed->getMarketData(pos.symbol());
+		if (data && data->lastPrice() > 0) {
+			m_userAccount->updatePositionPrice(pos.symbol(), data->lastPrice());
+		}
+	}
+	m_accountWidget->updateDisplay();
+}
+
+void MainWindow::onLogout()
+{
+	QMessageBox::StandardButton reply = QMessageBox::question(
+		this, "Logout",
+		"Are you sure you want to logout?",
+		QMessageBox::Yes | QMessageBox::No
+	);
+
+	if (reply == QMessageBox::Yes) {
+		qDebug() << "User confirmed logout";
+
+		// Perform logout
+		m_authManager->logout();
+
+		// Hide the main window during re-authentication
+		hide();
+
+		// Show login dialog again
+		LoginDialog loginDialog(m_authManager, nullptr);  // Use nullptr as parent so it's independent
+
+		if (loginDialog.exec() != QDialog::Accepted) {
+			qDebug() << "User cancelled re-login after logout - closing application";
+			// User cancelled - close application
+			QApplication::quit();  // Use quit() instead of close()
+			return;
+		}
+
+		// Get new user account
+		m_userAccount = m_authManager->getCurrentUser();
+
+		if (!m_userAccount) {
+			QMessageBox::critical(nullptr, "Error", "Failed to load user account");
+			QApplication::quit();
+			return;
+		}
+
+		// Update window title with new username
+		setWindowTitle(QString("Lightning Trade - %1").arg(m_authManager->getCurrentUsername()));
+
+		// Recreate the account widget with new user data
+		// Remove old widget from tab
+		int accountTabIndex = m_tradingTabs->indexOf(m_accountWidget);
+		if (accountTabIndex != -1) {
+			m_tradingTabs->removeTab(accountTabIndex);
+		}
+		delete m_accountWidget;
+
+		// Create new account widget with new user
+		m_accountWidget = new AccountWidget(m_userAccount, this);
+		m_tradingTabs->insertTab(accountTabIndex, m_accountWidget, "Account");
+
+		// Reconnect signals
+		connect(m_accountWidget, &AccountWidget::depositRequested,
+			this, &MainWindow::onAccountDeposit);
+		connect(m_accountWidget, &AccountWidget::withdrawalRequested,
+			this, &MainWindow::onAccountWithdrawal);
+
+		// Clear order blotter for new user
+		m_orderBlotterWidget->clearOrders();
+
+		// Clear any previous orders from the order manager
+		// m_orderManager->clearAllOrders();  // Add this method if needed
+
+		// Log the new login
+		m_orderBlotter->clear();  // Clear old logs
+		m_orderBlotter->append("Lightning Trade System Ready");
+		m_orderBlotter->append("Order Management System Initialized");
+		m_orderBlotter->append("Connecting to market data feeds...");
+		m_orderBlotter->append(QString("[%1] User %2 logged in")
+			.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+			.arg(m_authManager->getCurrentUsername()));
+
+		// Show the window again
+		show();
+
+		qDebug() << "User re-logged in successfully:" << m_authManager->getCurrentUsername();
+	}
+}
+
 
 void MainWindow::loadDemoPrices()
 {

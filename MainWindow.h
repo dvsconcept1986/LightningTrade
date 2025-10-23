@@ -24,6 +24,10 @@
 #include "OrderBlotterWidget.h"
 #include "MarketDataFeed.h"
 #include "MarketDataWidget.h"
+#include "UserAccount.h"
+#include "AccountWidget.h"
+#include "AuthManager.h"
+#include "LoginDialog.h"
 
 class MainWindow : public QMainWindow
 {
@@ -50,6 +54,12 @@ private slots:
 
 	// Market data slots
 	void onMarketDataUpdated(const QString& symbol, MarketData* data);
+
+	void onAccountDeposit(double amount);
+	void onAccountWithdrawal(double amount);
+	void updateAccountPositions();
+
+	void onLogout();
 
 private:
 	void setupUI();
@@ -111,4 +121,9 @@ private:
 
 	// Order Management System
 	OrderManager* m_orderManager;
+
+private:
+	UserAccount* m_userAccount;
+	AccountWidget* m_accountWidget;
+	AuthManager* m_authManager;
 };
