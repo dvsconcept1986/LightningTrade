@@ -1,4 +1,4 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QMenuBar>
@@ -6,9 +6,13 @@
 #include <QDateTime>
 #include <QNetworkRequest>
 #include <QUrl>
+#include <QDesktopServices>
+#include <QStatusBar>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <algorithm>
-
-// Add this to your MainWindow constructor initializer list:
+#include "StockTickerWidget.h"
 
 MainWindow::MainWindow(QWidget* parent)
 	: QMainWindow(parent)
@@ -18,8 +22,9 @@ MainWindow::MainWindow(QWidget* parent)
 	, m_clockTimer(new QTimer(this))
 	, m_orderManager(new OrderManager(this))
 	, m_marketDataFeed(new MarketDataFeed(this))
-	, m_authManager(new AuthManager(this))  // ADD THIS LINE!
+	, m_authManager(new AuthManager(this))
 	, m_userAccount(new UserAccount("trader001", "John Doe", "john@example.com"))
+	, m_stockTicker(nullptr)
 {
 	// Show login dialog BEFORE setting up UI
 	LoginDialog loginDialog(m_authManager, this);
@@ -42,6 +47,7 @@ MainWindow::MainWindow(QWidget* parent)
 	setupMenuBar();
 	setupUI();
 	setupStatusBar();
+	setupStockTicker();  // Setup the rolling stock ticker
 
 	// Connect market data signals
 	connect(m_refreshButton, &QPushButton::clicked, this, &MainWindow::refreshMarketData);
@@ -79,9 +85,6 @@ MainWindow::MainWindow(QWidget* parent)
 		m_marketDataFeed->subscribe(symbol);
 	}
 	m_marketDataFeed->connectToFeed();
-
-	// NOTE: Don't give starting balance here - it's handled by AuthManager during registration
-	// m_userAccount->deposit(100000.00, "Initial Deposit"); // REMOVE THIS LINE
 
 	// Load initial data
 	refreshMarketData();
@@ -180,12 +183,17 @@ void MainWindow::setupMarketDataArea()
 
 void MainWindow::setupNewsArea()
 {
-	m_newsGroup = new QGroupBox("Market News", this);
+	m_newsGroup = new QGroupBox("Market News - Finnhub", this);
 
 	QVBoxLayout* layout = new QVBoxLayout(m_newsGroup);
 
 	m_newsList = new QListWidget(m_newsGroup);
 	m_newsList->setAlternatingRowColors(true);
+	m_newsList->setCursor(Qt::PointingHandCursor);
+
+	// Connect click handler to open articles in browser
+	connect(m_newsList, &QListWidget::itemClicked,
+		this, &MainWindow::onNewsItemClicked);
 
 	layout->addWidget(m_newsList);
 }
@@ -202,7 +210,7 @@ void MainWindow::setupOrderManagementArea()
 	m_orderBlotterWidget = new OrderBlotterWidget(this);
 	m_tradingTabs->addTab(m_orderBlotterWidget, "Order Blotter");
 
-	// Account Tab (NEW)
+	// Account Tab
 	m_accountWidget = new AccountWidget(m_userAccount, this);
 	m_tradingTabs->addTab(m_accountWidget, "Account");
 
@@ -409,7 +417,6 @@ void MainWindow::refreshMarketData()
 	m_refreshButton->setEnabled(false);
 
 	loadMarketNews();
-	// Market prices now come from the feed automatically
 
 	m_refreshButton->setEnabled(true);
 	m_statusLabel->setText("Market data updated");
@@ -417,12 +424,13 @@ void MainWindow::refreshMarketData()
 
 void MainWindow::loadMarketNews()
 {
-	QString url = "https://api.rss2json.com/v1/api.json?rss_url=https://feeds.finance.yahoo.com/rss/2.0/headline";
+	QString apiKey = "d3vbvs9r01qt2ctp2tugd3vbvs9r01qt2ctp2tv0";
+
+	QString url = QString("https://finnhub.io/api/v1/news?category=general&token=%1").arg(apiKey);
 
 	QNetworkRequest request;
 	request.setUrl(QUrl(url));
-	request.setRawHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-	request.setRawHeader("Accept", "application/json");
+	request.setRawHeader("User-Agent", "Lightning Trade/1.0");
 
 	QNetworkReply* reply = m_networkManager->get(request);
 	connect(reply, &QNetworkReply::finished, this, &MainWindow::onNewsReplyFinished);
@@ -431,7 +439,6 @@ void MainWindow::loadMarketNews()
 void MainWindow::loadMarketPrices()
 {
 	// This is now handled by the MarketDataFeed
-	// Keeping this function for compatibility but it's not used anymore
 }
 
 void MainWindow::onNewsReplyFinished()
@@ -442,27 +449,46 @@ void MainWindow::onNewsReplyFinished()
 	reply->deleteLater();
 
 	if (reply->error() != QNetworkReply::NoError) {
-		loadDemoNews();
+		qDebug() << "Finnhub API Error:" << reply->errorString();
+
+		m_newsList->clear();
+		QListWidgetItem* errorItem = new QListWidgetItem("❌ Failed to load news from Finnhub");
+		errorItem->setForeground(QColor("#ff6464"));
+		m_newsList->addItem(errorItem);
+
+		QListWidgetItem* errorDetail = new QListWidgetItem(
+			QString("Error: %1").arg(reply->errorString()));
+		errorDetail->setForeground(QColor("#888"));
+		m_newsList->addItem(errorDetail);
+
 		m_refreshButton->setEnabled(true);
-		m_statusLabel->setText("Using demo news data");
+		m_statusLabel->setText("News feed unavailable");
 		return;
 	}
 
 	QByteArray data = reply->readAll();
 	QJsonDocument doc = QJsonDocument::fromJson(data);
-	QJsonObject root = doc.object();
 
-	if (root.contains("items")) {
-		QJsonArray items = root["items"].toArray();
-		if (items.size() > 0) {
-			updateNewsDisplay(items);
+	if (doc.isArray()) {
+		QJsonArray articles = doc.array();
+		if (articles.size() > 0) {
+			updateNewsDisplay(articles);
+			m_statusLabel->setText("Market data updated");
 		}
 		else {
-			loadDemoNews();
+			m_newsList->clear();
+			QListWidgetItem* noNewsItem = new QListWidgetItem("📰 No news articles available");
+			noNewsItem->setForeground(QColor("#888"));
+			m_newsList->addItem(noNewsItem);
+			m_statusLabel->setText("No news available");
 		}
 	}
 	else {
-		loadDemoNews();
+		m_newsList->clear();
+		QListWidgetItem* errorItem = new QListWidgetItem("❌ Invalid response from Finnhub");
+		errorItem->setForeground(QColor("#ff6464"));
+		m_newsList->addItem(errorItem);
+		m_statusLabel->setText("News feed error");
 	}
 
 	m_refreshButton->setEnabled(true);
@@ -478,24 +504,65 @@ void MainWindow::updateNewsDisplay(const QJsonArray& articles)
 {
 	m_newsList->clear();
 
-	int maxItems = std::min(10, static_cast<int>(articles.size()));
+	int maxItems = std::min(20, static_cast<int>(articles.size()));
+
 	for (int i = 0; i < maxItems; ++i) {
 		QJsonObject article = articles[i].toObject();
-		QString title = article["title"].toString();
 
-		if (!title.isEmpty()) {
-			m_newsList->addItem(title);
+		QString headline = article["headline"].toString();
+		QString url = article["url"].toString();
+		QString source = article["source"].toString();
+		qint64 timestamp = article["datetime"].toVariant().toLongLong();
+
+		if (!headline.isEmpty() && !url.isEmpty()) {
+			QString displayText = QString("📰 [%1] %2").arg(source, headline);
+
+			QListWidgetItem* item = new QListWidgetItem(displayText);
+			item->setData(Qt::UserRole, url);
+
+			QDateTime dt = QDateTime::fromSecsSinceEpoch(timestamp);
+			item->setToolTip(QString("%1\n\nSource: %2\nPublished: %3\n\nClick to open in browser")
+				.arg(headline, source, dt.toString("MMM dd, yyyy hh:mm AP")));
+
+			QFont font = item->font();
+			font.setUnderline(true);
+			item->setFont(font);
+			item->setForeground(QColor("#2a82da"));
+
+			m_newsList->addItem(item);
 		}
 	}
 
 	if (m_newsList->count() == 0) {
-		loadDemoNews();
+		QListWidgetItem* noNewsItem = new QListWidgetItem("📰 No valid news articles found");
+		noNewsItem->setForeground(QColor("#888"));
+		m_newsList->addItem(noNewsItem);
 	}
 }
 
 void MainWindow::updatePriceDisplay(const QJsonObject& data)
 {
 	// Not used anymore - prices come from MarketDataFeed
+}
+
+void MainWindow::onNewsItemClicked(QListWidgetItem* item)
+{
+	if (!item) return;
+
+	QString url = item->data(Qt::UserRole).toString();
+
+	if (!url.isEmpty()) {
+		bool success = QDesktopServices::openUrl(QUrl(url));
+
+		if (success) {
+			m_orderBlotter->append(QString("[%1] Opened news article in browser")
+				.arg(QDateTime::currentDateTime().toString("hh:mm:ss")));
+		}
+		else {
+			QMessageBox::warning(this, "Error",
+				"Failed to open URL in default browser.\n\nURL: " + url);
+		}
+	}
 }
 
 void MainWindow::showAbout()
@@ -511,29 +578,8 @@ void MainWindow::showAbout()
 		"<li>Real-time Market Data</li>"
 		"<li>Risk Management</li>"
 		"<li>Trade Execution</li>"
+		"<li>Live News Feed (Finnhub)</li>"
 		"</ul>");
-}
-
-void MainWindow::loadDemoNews()
-{
-	m_newsList->clear();
-
-	QStringList demoNews = {
-		"?? S&P 500 reaches new all-time high amid tech rally",
-		"?? Federal Reserve signals potential rate cuts in Q2",
-		"?? Microsoft reports strong quarterly earnings, stock up 5%",
-		"? Oil prices surge on OPEC+ production cut announcement",
-		"?? Dollar weakens against Euro as ECB hints at policy shift",
-		"?? Tesla stock jumps 8% on record delivery numbers",
-		"?? Manufacturing PMI data exceeds expectations",
-		"? Bitcoin breaks $50K resistance level",
-		"?? Apple announces new AI chip, shares climb 3%",
-		"?? Global markets rally on positive trade data"
-	};
-
-	for (const QString& news : demoNews) {
-		m_newsList->addItem(news);
-	}
 }
 
 void MainWindow::onAccountDeposit(double amount)
@@ -581,12 +627,11 @@ void MainWindow::onLogout()
 		hide();
 
 		// Show login dialog again
-		LoginDialog loginDialog(m_authManager, nullptr);  // Use nullptr as parent so it's independent
+		LoginDialog loginDialog(m_authManager, nullptr);
 
 		if (loginDialog.exec() != QDialog::Accepted) {
 			qDebug() << "User cancelled re-login after logout - closing application";
-			// User cancelled - close application
-			QApplication::quit();  // Use quit() instead of close()
+			QApplication::quit();
 			return;
 		}
 
@@ -603,7 +648,6 @@ void MainWindow::onLogout()
 		setWindowTitle(QString("Lightning Trade - %1").arg(m_authManager->getCurrentUsername()));
 
 		// Recreate the account widget with new user data
-		// Remove old widget from tab
 		int accountTabIndex = m_tradingTabs->indexOf(m_accountWidget);
 		if (accountTabIndex != -1) {
 			m_tradingTabs->removeTab(accountTabIndex);
@@ -623,11 +667,8 @@ void MainWindow::onLogout()
 		// Clear order blotter for new user
 		m_orderBlotterWidget->clearOrders();
 
-		// Clear any previous orders from the order manager
-		// m_orderManager->clearAllOrders();  // Add this method if needed
-
 		// Log the new login
-		m_orderBlotter->clear();  // Clear old logs
+		m_orderBlotter->clear();
 		m_orderBlotter->append("Lightning Trade System Ready");
 		m_orderBlotter->append("Order Management System Initialized");
 		m_orderBlotter->append("Connecting to market data feeds...");
@@ -642,6 +683,261 @@ void MainWindow::onLogout()
 	}
 }
 
+// Replace your setupStockTicker() with this version
+// This uses the REAL StockTickerWidget class (now that it's fixed)
+
+void MainWindow::setupStockTicker()
+{
+	qDebug() << "=== SETTING UP STOCK TICKER (REAL WIDGET) ===";
+
+	m_stockTicker = new StockTickerWidget(m_marketDataFeed, this);
+
+	qDebug() << "Ticker widget created:" << m_stockTicker;
+	qDebug() << "Ticker visible:" << m_stockTicker->isVisible();
+	qDebug() << "Ticker size:" << m_stockTicker->size();
+
+	// Add stocks
+	QStringList tickerSymbols = {
+		"AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA",
+		"JPM", "BAC", "V", "MA", "WMT", "JNJ", "PG", "HD"
+	};
+
+	for (const QString& symbol : tickerSymbols) {
+		m_stockTicker->addSymbol(symbol);
+	}
+
+	qDebug() << "Added" << tickerSymbols.size() << "symbols";
+
+	// Connect click handler
+	connect(m_stockTicker, &StockTickerWidget::symbolClicked,
+		this, &MainWindow::onTickerSymbolClicked);
+
+	// Get the current central widget
+	QWidget* oldCentralWidget = m_centralWidget;
+
+	if (!oldCentralWidget) {
+		qDebug() << "ERROR: m_centralWidget is NULL!";
+		m_orderBlotter->append("[ERROR] Cannot add ticker - central widget is NULL");
+		return;
+	}
+
+	// Create new container widget
+	QWidget* newCentralWidget = new QWidget(this);
+	QVBoxLayout* mainLayout = new QVBoxLayout(newCentralWidget);
+	mainLayout->setContentsMargins(0, 0, 0, 0);
+	mainLayout->setSpacing(0);
+
+	// Add ticker at top, then the original content below
+	mainLayout->addWidget(m_stockTicker);
+	mainLayout->addWidget(oldCentralWidget);
+
+	// Set as new central widget
+	setCentralWidget(newCentralWidget);
+	m_centralWidget = newCentralWidget;
+
+	// Force visibility
+	m_stockTicker->show();
+	newCentralWidget->show();
+	oldCentralWidget->show();
+
+	qDebug() << "After setup:";
+	qDebug() << "  Ticker visible:" << m_stockTicker->isVisible();
+	qDebug() << "  Ticker size:" << m_stockTicker->size();
+	qDebug() << "  Ticker width:" << m_stockTicker->width();
+	qDebug() << "  Ticker height:" << m_stockTicker->height();
+
+	m_orderBlotter->append(QString("[%1] Stock ticker initialized with %2 symbols")
+		.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+		.arg(tickerSymbols.size()));
+
+	qDebug() << "=== TICKER SETUP COMPLETE ===";
+}
+
+//void MainWindow::setupStockTicker()
+//{
+//	qDebug() << "=== SETTING UP STOCK TICKER ===";
+//
+//	m_stockTicker = new StockTickerWidget(m_marketDataFeed, this);
+//
+//	// Make ticker VERY visible with bright styling for debugging
+//	m_stockTicker->setStyleSheet(
+//		"StockTickerWidget {"
+//		"    background-color: #FF0000;"  // Bright red - can't miss it!
+//		"    border: 3px solid #FFFF00;"  // Yellow border
+//		"}"
+//	);
+//	m_stockTicker->setMinimumHeight(60);
+//	m_stockTicker->setMaximumHeight(60);
+//
+//	qDebug() << "Ticker created. Size:" << m_stockTicker->size();
+//
+//	// Add popular stocks to the ticker
+//	QStringList tickerSymbols = {
+//		"AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA",
+//		"JPM", "BAC", "V", "MA", "WMT", "JNJ", "PG", "HD",
+//		"DIS", "NFLX", "PYPL", "CSCO", "INTC", "AMD", "CRM"
+//	};
+//
+//	for (const QString& symbol : tickerSymbols) {
+//		m_stockTicker->addSymbol(symbol);
+//	}
+//
+//	qDebug() << "Added" << tickerSymbols.size() << "symbols";
+//
+//	// Connect click handler
+//	connect(m_stockTicker, &StockTickerWidget::symbolClicked,
+//		this, &MainWindow::onTickerSymbolClicked);
+//
+//	// Customize scroll speed
+//	m_stockTicker->setScrollSpeed(50);  // pixels per second
+//
+//	// Place ticker below menu bar as standalone widget
+//	// Get the current central widget
+//	QWidget* oldCentralWidget = m_centralWidget;
+//	qDebug() << "Old central widget:" << oldCentralWidget;
+//
+//	// Create new container widget
+//	QWidget* newCentralWidget = new QWidget(this);
+//	QVBoxLayout* mainLayout = new QVBoxLayout(newCentralWidget);
+//	mainLayout->setContentsMargins(0, 0, 0, 0);
+//	mainLayout->setSpacing(0);
+//
+//	qDebug() << "Created new container widget";
+//
+//	// Add ticker at top, then the original content below
+//	mainLayout->addWidget(m_stockTicker);
+//	mainLayout->addWidget(oldCentralWidget);
+//
+//	qDebug() << "Added widgets to layout";
+//
+//	// Set as new central widget
+//	setCentralWidget(newCentralWidget);
+//
+//	// Update reference to point to the container
+//	m_centralWidget = newCentralWidget;
+//
+//	// Force show everything
+//	m_stockTicker->show();
+//	m_stockTicker->setVisible(true);
+//	newCentralWidget->show();
+//	oldCentralWidget->show();
+//
+//	qDebug() << "After setup:";
+//	qDebug() << "  Ticker visible:" << m_stockTicker->isVisible();
+//	qDebug() << "  Ticker size:" << m_stockTicker->size();
+//	qDebug() << "  Ticker width:" << m_stockTicker->width();
+//	qDebug() << "  Ticker height:" << m_stockTicker->height();
+//	qDebug() << "  New central widget:" << newCentralWidget;
+//
+//	m_orderBlotter->append(QString("[%1] Stock ticker initialized with %2 symbols - LOOK FOR RED BAR AT TOP!")
+//		.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+//		.arg(tickerSymbols.size()));
+//
+//	qDebug() << "=== TICKER SETUP COMPLETE ===";
+//}
+
+void MainWindow::onTickerSymbolClicked(const QString& symbol)
+{
+	MarketData* data = m_marketDataFeed->getMarketData(symbol);
+	if (!data) {
+		QMessageBox::information(this, "Symbol Info",
+			QString("No data available for %1").arg(symbol));
+		return;
+	}
+
+	// Create detailed info with HTML formatting
+	QString changeColor = data->changeAmount() >= 0 ? "#00c800" : "#ff6464";
+	QString changeSymbol = data->changeAmount() >= 0 ? "▲" : "▼";
+
+	QString info = QString(
+		"<div style='font-family: Arial;'>"
+		"<h2 style='color: #2a82da; margin-bottom: 10px;'>%1</h2>"
+		"<table style='width: 100%; border-collapse: collapse;'>"
+		"<tr style='border-bottom: 1px solid #ccc;'>"
+		"  <td style='padding: 8px; font-weight: bold;'>Last Price:</td>"
+		"  <td style='padding: 8px; text-align: right; font-size: 14pt; font-weight: bold;'>$%2</td>"
+		"</tr>"
+		"<tr style='border-bottom: 1px solid #ccc;'>"
+		"  <td style='padding: 8px; font-weight: bold;'>Change:</td>"
+		"  <td style='padding: 8px; text-align: right; color: %7; font-weight: bold;'>%8 %3%4 (%5%6%)</td>"
+		"</tr>"
+		"<tr style='border-bottom: 1px solid #ccc;'>"
+		"  <td style='padding: 8px;'>Open:</td>"
+		"  <td style='padding: 8px; text-align: right;'>$%9</td>"
+		"</tr>"
+		"<tr style='border-bottom: 1px solid #ccc;'>"
+		"  <td style='padding: 8px;'>High:</td>"
+		"  <td style='padding: 8px; text-align: right;'>$%10</td>"
+		"</tr>"
+		"<tr style='border-bottom: 1px solid #ccc;'>"
+		"  <td style='padding: 8px;'>Low:</td>"
+		"  <td style='padding: 8px; text-align: right;'>$%11</td>"
+		"</tr>"
+		"<tr>"
+		"  <td style='padding: 8px;'>Volume:</td>"
+		"  <td style='padding: 8px; text-align: right;'>%12</td>"
+		"</tr>"
+		"</table>"
+		"</div>"
+	)
+		.arg(symbol)
+		.arg(data->lastPrice(), 0, 'f', 2)
+		.arg(data->changeAmount() >= 0 ? "+" : "")
+		.arg(data->changeAmount(), 0, 'f', 2)
+		.arg(data->changePercent() >= 0 ? "+" : "")
+		.arg(data->changePercent(), 0, 'f', 2)
+		.arg(changeColor)
+		.arg(changeSymbol)
+		.arg(data->openPrice(), 0, 'f', 2)
+		.arg(data->highPrice(), 0, 'f', 2)
+		.arg(data->lowPrice(), 0, 'f', 2)
+		.arg(data->totalVolume(), 0, 'f', 0);
+
+	QMessageBox msgBox(this);
+	msgBox.setWindowTitle(QString("%1 - Market Data").arg(symbol));
+	msgBox.setTextFormat(Qt::RichText);
+	msgBox.setText(info);
+	msgBox.setIcon(QMessageBox::Information);
+	msgBox.setStandardButtons(QMessageBox::Ok | QMessageBox::Close);
+	msgBox.setDefaultButton(QMessageBox::Ok);
+
+	// Add custom buttons for actions
+	QPushButton* buyButton = msgBox.addButton("Place Buy Order", QMessageBox::ActionRole);
+	QPushButton* sellButton = msgBox.addButton("Place Sell Order", QMessageBox::ActionRole);
+	QPushButton* chartButton = msgBox.addButton("View Chart", QMessageBox::ActionRole);
+
+	msgBox.exec();
+
+	// Handle button clicks
+	if (msgBox.clickedButton() == buyButton) {
+		m_tradingTabs->setCurrentIndex(0);  // Switch to Order Entry
+		m_orderBlotter->append(QString("[%1] Ready to place buy order for %2 at $%3")
+			.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+			.arg(symbol)
+			.arg(data->lastPrice(), 0, 'f', 2));
+	}
+	else if (msgBox.clickedButton() == sellButton) {
+		m_tradingTabs->setCurrentIndex(0);  // Switch to Order Entry
+		m_orderBlotter->append(QString("[%1] Ready to place sell order for %2 at $%3")
+			.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+			.arg(symbol)
+			.arg(data->lastPrice(), 0, 'f', 2));
+	}
+	else if (msgBox.clickedButton() == chartButton) {
+		// Open Yahoo Finance chart
+		QString url = QString("https://finance.yahoo.com/quote/%1").arg(symbol);
+		QDesktopServices::openUrl(QUrl(url));
+		m_orderBlotter->append(QString("[%1] Opened chart for %2")
+			.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+			.arg(symbol));
+	}
+
+	// Log the ticker click
+	m_orderBlotter->append(QString("[%1] Clicked %2 in ticker (Price: $%3)")
+		.arg(QDateTime::currentDateTime().toString("hh:mm:ss"))
+		.arg(symbol)
+		.arg(data->lastPrice(), 0, 'f', 2));
+}
 
 void MainWindow::loadDemoPrices()
 {

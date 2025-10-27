@@ -1,111 +1,112 @@
 #pragma once
-#include <QtWidgets/QMainWindow>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGridLayout>
+#include <QMainWindow>
+#include <QWidget>
+#include <QSplitter>
+#include <QGroupBox>
+#include <QTableWidget>
+#include <QListWidget>
+#include <QPushButton>
 #include <QTextEdit>
 #include <QLabel>
-#include <QPushButton>
-#include <QStatusBar>
 #include <QTimer>
-#include <QGroupBox>
-#include <QListWidget>
-#include <QTableWidget>
-#include <QSplitter>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
 #include <QTabWidget>
-#include "ui_MainWindow.h"
 #include "OrderManager.h"
 #include "OrderEntryWidget.h"
 #include "OrderBlotterWidget.h"
 #include "MarketDataFeed.h"
-#include "MarketDataWidget.h"
-#include "UserAccount.h"
-#include "AccountWidget.h"
 #include "AuthManager.h"
+#include "AccountWidget.h"
 #include "LoginDialog.h"
+#include "StockTickerWidget.h"
 
 class MainWindow : public QMainWindow
 {
 	Q_OBJECT
 
 public:
-	MainWindow(QWidget* parent = nullptr);
+	explicit MainWindow(QWidget* parent = nullptr);
 	~MainWindow();
 
 private slots:
-	void refreshMarketData();
-	void onNewsReplyFinished();
-	void onPriceReplyFinished();
-	void showAbout();
-
-	// OMS slots
-	void handleOrderRequest(const QString& symbol, OrderSide side, OrderType type,
-		double quantity, double price);
+	// Order management slots
+	void handleOrderRequest(const QString& symbol, OrderSide side,
+		OrderType type, double quantity, double price);
 	void handleCancelRequest(const QString& orderId);
 	void handleModifyRequest(const QString& orderId);
 	void onOrderStatusChanged(const QString& orderId, OrderStatus status);
 	void onOrderManagerLog(const QString& message);
-	void refreshOrderBlotter();
 
 	// Market data slots
 	void onMarketDataUpdated(const QString& symbol, MarketData* data);
 
+	// UI interaction slots
+	void refreshOrderBlotter();
+	void refreshMarketData();
+	void showAbout();
+
+	// News slots
+	void onNewsReplyFinished();
+	void onPriceReplyFinished();
+	void onNewsItemClicked(QListWidgetItem* item);
+
+	// Account slots
 	void onAccountDeposit(double amount);
 	void onAccountWithdrawal(double amount);
-	void updateAccountPositions();
 
+	// Auth slots
 	void onLogout();
 
+	// Stock ticker slot
+	void onTickerSymbolClicked(const QString& symbol);
+
 private:
-	void setupUI();
 	void setupMenuBar();
-	void setupStatusBar();
+	void setupUI();
 	void setupMarketDataArea();
 	void setupNewsArea();
-	void setupTradingArea();
 	void setupOrderManagementArea();
+	void setupTradingArea();
+	void setupStatusBar();
+	void setupStockTicker();
 
 	void loadMarketNews();
 	void loadMarketPrices();
-	void updatePriceDisplay(const QJsonObject& data);
 	void updateNewsDisplay(const QJsonArray& articles);
-	void loadDemoNews();
+	void updatePriceDisplay(const QJsonObject& data);
+	void updateAccountPositions();
 	void loadDemoPrices();
 
 private:
-	Ui::MainWindowClass ui;
-
-	// Central widget and layouts
+	// Central widget and layout
 	QWidget* m_centralWidget;
 	QSplitter* m_mainSplitter;
 	QSplitter* m_rightSplitter;
 
-	// Market data widgets
+	// Market data area
 	QGroupBox* m_marketDataGroup;
 	QTableWidget* m_priceTable;
 	QPushButton* m_refreshButton;
 
-	// News widgets
+	// News area
 	QGroupBox* m_newsGroup;
 	QListWidget* m_newsList;
 
-	// Trading widgets  
-	QGroupBox* m_tradingGroup;
-	QTextEdit* m_orderBlotter;
-
-	// OMS widgets
+	// Order management area
 	QTabWidget* m_tradingTabs;
 	OrderEntryWidget* m_orderEntryWidget;
 	OrderBlotterWidget* m_orderBlotterWidget;
+	AccountWidget* m_accountWidget;
 
-	// Market Data Feed
-	MarketDataFeed* m_marketDataFeed;
-	MarketDataWidget* m_marketDataWidget;
+	// Trading area (system log)
+	QGroupBox* m_tradingGroup;
+	QTextEdit* m_orderBlotter;
+
+	// Status bar
+	QLabel* m_statusLabel;
+	QLabel* m_orderStatsLabel;
+	QLabel* m_clockLabel;
 
 	// Network
 	QNetworkAccessManager* m_networkManager;
@@ -114,16 +115,16 @@ private:
 	QTimer* m_refreshTimer;
 	QTimer* m_clockTimer;
 
-	// Status
-	QLabel* m_statusLabel;
-	QLabel* m_clockLabel;
-	QLabel* m_orderStatsLabel;
-
-	// Order Management System
+	// Order management
 	OrderManager* m_orderManager;
 
-private:
-	UserAccount* m_userAccount;
-	AccountWidget* m_accountWidget;
+	// Market data feed
+	MarketDataFeed* m_marketDataFeed;
+
+	// Authentication
 	AuthManager* m_authManager;
+	UserAccount* m_userAccount;
+
+	// Stock ticker
+	StockTickerWidget* m_stockTicker;
 };

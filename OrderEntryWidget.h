@@ -1,5 +1,4 @@
 #pragma once
-#pragma once
 #include <QWidget>
 #include <QGroupBox>
 #include <QLineEdit>

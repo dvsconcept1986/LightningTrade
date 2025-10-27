@@ -106,6 +106,14 @@
     <ClCompile Include="OrderBlotterWidget.cpp" />
     <ClCompile Include="OrderEntryWidget.cpp" />
     <ClCompile Include="OrderManager.cpp" />
+    <ClCompile Include="StockTickerWidget.cpp">
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Filename).moc</QtMocFileName>
+      <DynamicSource Condition="'$(Configuration)|$(Platform)'=='Release|x64'">input</DynamicSource>
+      <QtMocFileName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Filename).moc</QtMocFileName>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="UserAccount.cpp" />
     <QtRcc Include="MainWindow.qrc" />
     <QtUic Include="MainWindow.ui" />
@@ -118,6 +126,7 @@
     <QtMoc Include="AuthManager.h" />
     <QtMoc Include="LoginDialog.h" />
     <ClInclude Include="MarketData.h" />
+    <QtMoc Include="StockTickerWidget.h" />
     <ClInclude Include="UserAccount.h" />
     <QtMoc Include="MarketDataWidget.h" />
     <QtMoc Include="MarketDataFeed.h" />
