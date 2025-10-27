@@ -10,10 +10,11 @@ MarketDataFeed::MarketDataFeed(QObject* parent)
 	, m_webSocket(new QWebSocket())
 	, m_networkManager(new QNetworkAccessManager(this))
 	, m_status(FeedStatus::Disconnected)
-	, m_webSocketUrl("wss://stream.example.com/market")
-	, m_restApiUrl("https://api.example.com/market")
+	, m_webSocketUrl("wss://ws.finnhub.io")  // Finnhub WebSocket URL
+	, m_restApiUrl("https://finnhub.io/api/v1")  // Finnhub REST API
 	, m_updateInterval(1000)
-	, m_useSimulation(true)  // Default to simulation mode
+	, m_useSimulation(false)  // Try real data first
+	, m_finnhubApiKey("d3vbvs9r01qt2ctp2tugd3vbvs9r01qt2ctp2tv0")  // ADD YOUR API KEY
 	, m_reconnectTimer(new QTimer(this))
 	, m_heartbeatTimer(new QTimer(this))
 	, m_simulationTimer(new QTimer(this))
@@ -38,7 +39,10 @@ MarketDataFeed::MarketDataFeed(QObject* parent)
 	m_heartbeatTimer->setInterval(30000);  // Heartbeat every 30 seconds
 	connect(m_heartbeatTimer, &QTimer::timeout, this, [this]() {
 		if (m_webSocket->isValid()) {
-			m_webSocket->sendTextMessage("{\"type\":\"heartbeat\"}");
+			// Finnhub WebSocket ping
+			QJsonObject ping;
+			ping["type"] = "ping";
+			m_webSocket->sendTextMessage(QJsonDocument(ping).toJson(QJsonDocument::Compact));
 		}
 		});
 
@@ -60,7 +64,7 @@ void MarketDataFeed::connectToFeed()
 		return;
 	}
 
-	emit logMessage("[FEED] Connecting to market data feed...");
+	emit logMessage("[FEED] Connecting to Finnhub market data feed...");
 	setStatus(FeedStatus::Connecting);
 
 	if (m_useSimulation) {
@@ -71,8 +75,10 @@ void MarketDataFeed::connectToFeed()
 		emit connected();
 	}
 	else {
-		// Try real WebSocket connection
-		m_webSocket->open(QUrl(m_webSocketUrl));
+		// Connect to Finnhub WebSocket with API key
+		QString url = QString("%1?token=%2").arg(m_webSocketUrl, m_finnhubApiKey);
+		emit logMessage(QString("[FEED] Connecting to: %1").arg(m_webSocketUrl));
+		m_webSocket->open(QUrl(url));
 	}
 }
 
@@ -107,15 +113,17 @@ void MarketDataFeed::subscribe(const QString& symbol)
 
 	emit logMessage(QString("[FEED] Subscribed to %1").arg(symbol));
 
-	// Send subscription message if connected
+	// Send subscription message to Finnhub if connected
 	if (m_status == FeedStatus::Connected && !m_useSimulation) {
 		QJsonObject msg;
 		msg["type"] = "subscribe";
 		msg["symbol"] = symbol;
-		m_webSocket->sendTextMessage(QJsonDocument(msg).toJson(QJsonDocument::Compact));
+		QString jsonMsg = QJsonDocument(msg).toJson(QJsonDocument::Compact);
+		m_webSocket->sendTextMessage(jsonMsg);
+		emit logMessage(QString("[FEED] Sent subscribe message: %1").arg(jsonMsg));
 	}
 
-	// Fetch initial snapshot
+	// Fetch initial snapshot from REST API
 	if (!m_useSimulation) {
 		fetchSnapshotData(symbol);
 	}
@@ -127,7 +135,7 @@ void MarketDataFeed::unsubscribe(const QString& symbol)
 
 	emit logMessage(QString("[FEED] Unsubscribed from %1").arg(symbol));
 
-	// Send unsubscribe message if connected
+	// Send unsubscribe message to Finnhub if connected
 	if (m_status == FeedStatus::Connected && !m_useSimulation) {
 		QJsonObject msg;
 		msg["type"] = "unsubscribe";
@@ -167,23 +175,25 @@ QList<MarketData*> MarketDataFeed::getAllMarketData() const
 
 void MarketDataFeed::onWebSocketConnected()
 {
-	emit logMessage("[FEED] WebSocket connected");
+	emit logMessage("[FEED] WebSocket connected to Finnhub");
 	setStatus(FeedStatus::Connected);
 	m_heartbeatTimer->start();
 	emit connected();
 
-	// Resubscribe to all symbols
+	// Subscribe to all symbols
 	for (const QString& symbol : m_subscribedSymbols) {
 		QJsonObject msg;
 		msg["type"] = "subscribe";
 		msg["symbol"] = symbol;
-		m_webSocket->sendTextMessage(QJsonDocument(msg).toJson(QJsonDocument::Compact));
+		QString jsonMsg = QJsonDocument(msg).toJson(QJsonDocument::Compact);
+		m_webSocket->sendTextMessage(jsonMsg);
+		emit logMessage(QString("[FEED] Subscribed to %1").arg(symbol));
 	}
 }
 
 void MarketDataFeed::onWebSocketDisconnected()
 {
-	emit logMessage("[FEED] WebSocket disconnected");
+	emit logMessage("[FEED] WebSocket disconnected from Finnhub");
 	m_heartbeatTimer->stop();
 	setStatus(FeedStatus::Disconnected);
 	emit disconnected();
@@ -191,6 +201,7 @@ void MarketDataFeed::onWebSocketDisconnected()
 	// Attempt reconnection
 	if (!m_useSimulation) {
 		setStatus(FeedStatus::Reconnecting);
+		emit logMessage("[FEED] Attempting to reconnect in 5 seconds...");
 		m_reconnectTimer->start();
 	}
 }
@@ -204,7 +215,7 @@ void MarketDataFeed::onWebSocketError(QAbstractSocket::SocketError error)
 
 	// Fall back to simulation mode
 	if (!m_useSimulation) {
-		emit logMessage("[FEED] Falling back to simulation mode");
+		emit logMessage("[FEED] Failed to connect to Finnhub - falling back to simulation mode");
 		m_useSimulation = true;
 		startSimulation();
 		setStatus(FeedStatus::Connected);
@@ -222,7 +233,6 @@ void MarketDataFeed::onWebSocketBinaryMessageReceived(const QByteArray& message)
 {
 	m_messagesReceived++;
 	m_lastMessageTime = QDateTime::currentDateTime();
-	// Handle binary protocol if needed
 }
 
 void MarketDataFeed::onRestApiReplyFinished()
@@ -235,6 +245,9 @@ void MarketDataFeed::onRestApiReplyFinished()
 	if (reply->error() == QNetworkReply::NoError) {
 		QByteArray data = reply->readAll();
 		processRestApiData(data);
+	}
+	else {
+		emit logMessage(QString("[FEED] REST API error: %1").arg(reply->errorString()));
 	}
 }
 
@@ -262,48 +275,134 @@ void MarketDataFeed::processWebSocketMessage(const QString& message)
 
 	QJsonObject obj = doc.object();
 	QString type = obj["type"].toString();
-	QString symbol = obj["symbol"].toString();
 
-	if (!m_marketData.contains(symbol)) {
+	// Handle Finnhub WebSocket response format
+	if (type == "ping") {
+		// Respond to ping
 		return;
 	}
+	else if (type == "trade") {
+		// Finnhub sends trade data in "data" array
+		QJsonArray dataArray = obj["data"].toArray();
 
-	MarketData* data = m_marketData[symbol];
+		for (const QJsonValue& val : dataArray) {
+			QJsonObject trade = val.toObject();
 
-	if (type == "trade") {
-		double price = obj["price"].toDouble();
-		double volume = obj["volume"].toDouble();
-		data->updateTrade(price, volume);
-		emit tradeReceived(symbol, price, volume);
-		emit marketDataUpdated(symbol, data);
-		m_messagesProcessed++;
+			QString symbol = trade["s"].toString();  // Symbol
+			double price = trade["p"].toDouble();    // Price
+			double volume = trade["v"].toDouble();   // Volume
+			qint64 timestamp = trade["t"].toVariant().toLongLong();  // Timestamp
+
+			if (!m_marketData.contains(symbol)) {
+				continue;
+			}
+
+			MarketData* data = m_marketData[symbol];
+			data->updateTrade(price, volume);
+
+			emit tradeReceived(symbol, price, volume);
+			emit marketDataUpdated(symbol, data);
+			m_messagesProcessed++;
+
+			emit logMessage(QString("[FEED] Trade: %1 @ $%2 (Vol: %3)")
+				.arg(symbol)
+				.arg(price, 0, 'f', 2)
+				.arg(volume));
+		}
 	}
-	else if (type == "quote") {
-		double bid = obj["bid"].toDouble();
-		double ask = obj["ask"].toDouble();
-		double bidSize = obj["bidSize"].toDouble();
-		double askSize = obj["askSize"].toDouble();
-		data->updateQuote(bid, bidSize, ask, askSize);
-		emit quoteReceived(symbol, bid, ask);
-		emit marketDataUpdated(symbol, data);
-		m_messagesProcessed++;
+	else {
+		// Log unknown message types for debugging
+		emit logMessage(QString("[FEED] Unknown message type: %1").arg(type));
 	}
 }
 
 void MarketDataFeed::processRestApiData(const QByteArray& data)
 {
 	QJsonDocument doc = QJsonDocument::fromJson(data);
-	if (doc.isNull()) return;
+	if (doc.isNull() || !doc.isObject()) {
+		return;
+	}
 
-	// Process REST API response (implementation depends on API format)
+	QJsonObject obj = doc.object();
+
+	// Handle Finnhub quote response
+	// {"c":183.14,"d":1.24,"dp":0.682,"h":184.50,"l":182.11,"o":182.90,"pc":181.90,"t":1640995200}
+	double currentPrice = obj["c"].toDouble();  // Current price
+	double change = obj["d"].toDouble();        // Change
+	double changePercent = obj["dp"].toDouble(); // Change percent
+	double high = obj["h"].toDouble();          // High
+	double low = obj["l"].toDouble();           // Low
+	double open = obj["o"].toDouble();          // Open
+	double previousClose = obj["pc"].toDouble(); // Previous close
+
+	// Extract symbol from the URL (we'll need to pass it through)
+	// For now, this will be handled in fetchSnapshotData
 }
 
 void MarketDataFeed::fetchSnapshotData(const QString& symbol)
 {
-	QString url = QString("%1/snapshot/%2").arg(m_restApiUrl).arg(symbol);
+	// Finnhub REST API endpoint for quote data
+	QString url = QString("%1/quote?symbol=%2&token=%3")
+		.arg(m_restApiUrl, symbol, m_finnhubApiKey);
+
+	emit logMessage(QString("[FEED] Fetching snapshot for %1").arg(symbol));
+
 	QNetworkRequest request(url);
 	QNetworkReply* reply = m_networkManager->get(request);
-	connect(reply, &QNetworkReply::finished, this, &MarketDataFeed::onRestApiReplyFinished);
+
+	// Store symbol in reply property so we can use it in the callback
+	reply->setProperty("symbol", symbol);
+
+	connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+		if (!reply) return;
+
+		QString symbol = reply->property("symbol").toString();
+		reply->deleteLater();
+
+		if (reply->error() != QNetworkReply::NoError) {
+			emit logMessage(QString("[FEED] Error fetching %1: %2")
+				.arg(symbol, reply->errorString()));
+			return;
+		}
+
+		QByteArray data = reply->readAll();
+		QJsonDocument doc = QJsonDocument::fromJson(data);
+
+		if (doc.isNull() || !doc.isObject()) {
+			return;
+		}
+
+		QJsonObject obj = doc.object();
+
+		if (!m_marketData.contains(symbol)) {
+			return;
+		}
+
+		MarketData* marketData = m_marketData[symbol];
+
+		double currentPrice = obj["c"].toDouble();
+		double open = obj["o"].toDouble();
+		double high = obj["h"].toDouble();
+		double low = obj["l"].toDouble();
+		double previousClose = obj["pc"].toDouble();
+
+		if (currentPrice > 0) {
+			marketData->setOpenPrice(open);
+			marketData->setHighPrice(high);
+			marketData->setLowPrice(low);
+			// setPreviousClose doesn't exist in MarketData - skip it
+			marketData->updateTrade(currentPrice, 0);  // Initialize with current price
+
+			emit logMessage(QString("[FEED] Snapshot for %1: $%2 (Open: $%3, High: $%4, Low: $%5)")
+				.arg(symbol)
+				.arg(currentPrice, 0, 'f', 2)
+				.arg(open, 0, 'f', 2)
+				.arg(high, 0, 'f', 2)
+				.arg(low, 0, 'f', 2));
+
+			emit marketDataUpdated(symbol, marketData);
+		}
+		});
 }
 
 void MarketDataFeed::startSimulation()
@@ -337,6 +436,8 @@ void MarketDataFeed::generateRandomMarketData(const QString& symbol)
 		else if (symbol == "AMZN") lastPrice = 151.94;
 		else if (symbol == "NVDA") lastPrice = 722.48;
 		else if (symbol == "META") lastPrice = 434.61;
+		else if (symbol == "SPY") lastPrice = 469.50;
+		else if (symbol == "QQQ") lastPrice = 395.80;
 		else lastPrice = 100.0;
 
 		data->setOpenPrice(lastPrice);
@@ -360,4 +461,9 @@ void MarketDataFeed::generateRandomMarketData(const QString& symbol)
 
 	emit marketDataUpdated(symbol, data);
 	emit tradeReceived(symbol, newPrice, volume);
+}
+
+void MarketDataFeed::setFinnhubApiKey(const QString& apiKey)
+{
+	m_finnhubApiKey = apiKey;
 }

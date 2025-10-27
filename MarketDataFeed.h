@@ -1,5 +1,4 @@
 #pragma once
-#pragma once
 #include <QObject>
 #include <QMap>
 #include <QTimer>
@@ -44,6 +43,7 @@ public:
 	void setUpdateInterval(int milliseconds) { m_updateInterval = milliseconds; }
 	void setWebSocketUrl(const QString& url) { m_webSocketUrl = url; }
 	void setRestApiUrl(const QString& url) { m_restApiUrl = url; }
+	void setFinnhubApiKey(const QString& apiKey);  // NEW: Set API key
 
 signals:
 	// Connection signals
@@ -66,7 +66,6 @@ private slots:
 	void onWebSocketError(QAbstractSocket::SocketError error);
 	void onWebSocketTextMessageReceived(const QString& message);
 	void onWebSocketBinaryMessageReceived(const QByteArray& message);
-
 	void onRestApiReplyFinished();
 	void simulateMarketData();
 
@@ -90,6 +89,7 @@ private:
 	QString m_restApiUrl;
 	int m_updateInterval;
 	bool m_useSimulation;
+	QString m_finnhubApiKey;  // NEW: Store Finnhub API key
 
 	// Data storage
 	QMap<QString, MarketData*> m_marketData;
